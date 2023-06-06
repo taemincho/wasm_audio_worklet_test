@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+    <meta name="viewport" content="width=device-width" />
+    <title>AudioWorklet Test</title>
+    <link rel="stylesheet" href="" />
+    <style>
+        ._button {
+            padding: 15px 32px;
+            text-align: center;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>WASM AudioEngine Record Test</h1>
+    <button id="Resume">Press This First for activating AudioContext</button>
+    <button id="Record">Record</button>
+    <button id="Stop">Stop and Download the recording</button>
+    <button id="Monitoring">Monitoring</button>
+</body>
+
+<script type="module">
+    import * as AW_Node from './aw_node.js';
+
+    var AudioContext = window.AudioContext || window.webkitAudioContext;
+    var activeStream;
+    var activeSource;
+
+    const MEDIA_STREAM_CONSTRAINTS = {
+        audio: {
+            latency: 0.005,
+            echoCancellation: false,
+            autoGainControl: false,
+            noiseSuppression: false,
+            sampleRate: 44100,
+            sgumJsBlockSize: 16384,
+            sgumNativeBlockSize: 128,
+            sgumNativeFlushSize: 1024,
+        },
+        video: false
+    };
+
+    const context = new AudioContext({
+        latencyHint: 0,  // possible lowest latency, this will make baseLatency: 0.0029024943310657597 in MacBook Pro, default: 0.005804988662131519
+        sampleRate: 44100,
+    });
+
+    console.log(MEDIA_STREAM_CONSTRAINTS);
+    console.log("Media Constraints: ", navigator.mediaDevices.getSupportedConstraints())
+    console.log(context)
+
+    const downloadURL = (data, fileName) => {
+        const a = document.createElement('a')
+        a.href = data
+        a.download = fileName
+        document.body.appendChild(a)
+        a.style.display = 'none'
+        a.click()
+        a.remove()
+    }
+
+    const downloadBlob = (data, fileName, mimeType) => {
+        const blob = new Blob([data], {
+            type: mimeType
+        })
+        const url = window.URL.createObjectURL(blob)
+        downloadURL(url, fileName)
+        setTimeout(() => window.URL.revokeObjectURL(url), 1000)
+    }
+
+    context.audioWorklet.addModule("libaudioengine.js").then(async () => {
+        // Create audioEngineNode
+        const audioEngineNode = new AW_Node.AudioEngineWorkletNode(context);
+
+        // console.log("Destination", context.destination);
+        audioEngineNode.connect(context.destination);
+
+        async function resume() {
+            context.resume()
+                .then(async () => {
+                    navigator.mediaDevices.getUserMedia(
+                        MEDIA_STREAM_CONSTRAINTS
+                    )
+                        .then(async function (stream) {
+                            const source = await context.createMediaStreamSource(stream);
+                            source.connect(audioEngineNode);
+
+                            if (activeSource) { // disconnect the previous stream if exists
+                                activeSource.disconnect();
+                                console.log("disconnect Previous stream");
+                            }
+                            if (activeStream) { // stop the previous stream if exists
+                                activeStream.getTracks().forEach(track => track.stop());
+                                console.log("stop Previous stream");
+                            }
+                            activeSource = source;
+                            activeStream = stream;
+
+                            console.log("activeStream:", activeStream);
+                            let track = activeStream.getAudioTracks()[0];
+                            // console.log("Input Audio Settings: ", activeStream.getSettings());
+                            console.log("activeSource:", activeSource);
+                            console.log('Playback resumed successfully');
+                        })
+                        .catch(function (err) {
+                            console.log(err);
+                        });
+                });
+        };
+
+        let scheduler;
+        let position_ticks = 0;
+        let isMonitoring = false;
+        let file = "test.wav"
+        const testx = [1, 2, 3, 4];
+        let idx = 0;
+        console.log("TESTX", testx[idx++]);
+
+        document.getElementById("Record").addEventListener("click", function () {
+            audioEngineNode.Recorder.startRecording(file);
+            // scheduler = setInterval(
+            //     async ()=>{
+            //         audioEngineNode.Recorder.getPos()
+            //         .then((t)=> {
+            //             console.log(t)
+            //             position_ticks = t;
+            //         })
+            //     }
+            //     , 1000.0);
+            console.log("Start");
+        });
+
+        document.getElementById("Stop").addEventListener("click", function () {
+            audioEngineNode.Recorder.stopRecording();
+            // clearInterval(scheduler);
+            // scheduler = null;
+            // console.log(position_ticks);
+            // position_ticks = 0;
+            console.log("Stop");
+            setTimeout(() => {
+                audioEngineNode.FS.exists(file).then((exist) => {
+                    if (exist) {
+                        audioEngineNode.FS.readFile(file).then((buffer) => {
+                            downloadBlob(buffer, file, "audio/wav");
+                        });
+                    }
+                });
+            }, 1000);
+
+        });
+
+        document.getElementById("Monitoring").addEventListener("click", function () {
+            isMonitoring = !isMonitoring;
+            audioEngineNode.Recorder.monitoring(isMonitoring);
+        });
+
+        document.getElementById("Resume").addEventListener("click", function () {
+            resume();
+        });
+    });
+
+</script>
+
+</html>
